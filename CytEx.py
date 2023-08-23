@@ -1,509 +1,214 @@
-import pandas as pd
+"""
+CytEx 1.0
+"""
+import argparse
 import os
+import pandas as pd
 import numpy as np
-from datetime import date
+from progress.bar import FillingCirclesBar
 
 
-# Ask the user to select the assay
-print("Select the assay:")
-print("1. hAST")
-print("2. mAST")
+def excel_file(input_path):
+    """
+    Validate the file format for "raw_data" and "matrix".
+    """
+    _, ext = os.path.splitext(input_path)
+    if ext not in ['.xlsx', 'xls']:
+        raise argparse.ArgumentTypeError(f"{input_path} is not an Excel file")
+    return input_path
+parser = argparse.ArgumentParser(description="Command line tool for acquiring user input")
+parser.add_argument("-a", "--assay", help="Assay type", type=str, choices=['ast', 'hc50'], required=False, default='hc50')
+parser.add_argument("-p", "--prefix", help = "Prefix", type = lambda s: s.replace(" ", "-"), required = False, default="Sample_name")
+parser.add_argument("-d", "--raw_data", help = "Plate reader data", type = excel_file, required = True)
+parser.add_argument("-m", "--matrix", help = "Matrix map", type = excel_file, required = True)
+parser.add_argument("-r", "--num_tech_rep", help = "Number of replicates",type = int, required= False, default = 2)
+parser.add_argument("-s", "--start_con", help = "Starting concentration", type = int, required = False, default = 128)
+parser.add_argument("-f", "--final_con", help = "Final concentration", type = int, required = False, default = 1)
+parser.add_argument("-t", "--threshold", help = "MIC threshold", type = int, required = False, default = 0.4999)
+args = parser.parse_args()
 
-assay = input()
+def detect_plate(row, col, raw_data_array):
+    """Detect the start of a new plate using the markers "A" and 1."""
+    cell = raw_data_array[row, col]
+    cell_south = raw_data_array[row + 1, col]
+    cell_east = raw_data_array[row, col + 1]
+    return pd.isna(cell) and cell_south == "A" and cell_east == 1
 
-### hAST
-if assay == "1":
-    # Ask for the organism name
-    organism_name = input("Enter the organism name used in the experiment: ")
+def process_plate(row, col, raw_data_array, matrix_data, master_dict, plate_num):
+    """Process a detected plate to capture absorbance value, synth_id, and amc."""
+    master_dict[plate_num] = {'wells': {}}
+    for i in range(8):
+        for j in range(12):
+            well = chr(ord('A') + i) + str(j + 1)
+            master_dict[plate_num]['wells'][well] = {'abs_val': raw_data_array[row + 1 + i, col + 1 + j]}
+            matrix_row = matrix_data[matrix_data['well'] == well]
+            if not matrix_row.empty:
+                master_dict[plate_num]['wells'][well]['synth_id'] = matrix_row['synth_id'].values[0]
+                master_dict[plate_num]['wells'][well]['amc'] = matrix_row['amc'].values[0]
 
-    # Replace spaces in the organism name with underscores
-    organism_name = organism_name.replace(" ", "_")
-
-    # Create unique folder name with the current date
-    folder_name = f"{organism_name}_{date.today().strftime('%m_%d_%Y')}"
-
-    # Ask the user for the raw file paths and validate them
-        # Function to validate whether the given file path is an Excel file
-    def is_excel_file(file_path):
-        return file_path.endswith('.xlsx') or file_path.endswith('.xls')
-    
-    while True:
-        file_path = input('Please enter the path of raw plate read data: ')
-        if not is_excel_file(file_path) or not os.path.exists(file_path):
-            print('Invalid file path or the file is not in Excel format. Please try again.')
-        else:
-            break
-
-    while True:
-        matrix_map_path = input('Please enter the file path of the matrix map: ')
-        if not is_excel_file(matrix_map_path) or not os.path.exists(matrix_map_path):
-            print('Invalid file path or the file is not in Excel format. Please try again.')
-        else:
-            break
-
-    raw_data = pd.read_excel(file_path)
-    matrix_map = pd.read_excel(matrix_map_path)
-
-    # Convert dataframes to numpy arrays
+def process_data(raw_data_path, matrix_path):
+    """Process the raw data and return a master dictionary with processed plate data."""
+    raw_data = pd.read_excel(raw_data_path)
+    matrix_data = pd.read_excel(matrix_path)
     raw_data_array = raw_data.to_numpy()
+    num_rows, num_cols = raw_data_array.shape
+    num_plates = 0
+    master_dict = {'plates': {}}
+    total_cells = (num_rows - 1) * (num_cols - 1)
+    progress_bar = FillingCirclesBar('Processing data:    ', max=total_cells)
+    for row in range(num_rows - 1):
+        for col in range(num_cols - 1):
+            if detect_plate(row, col, raw_data_array):
+                num_plates += 1
+                process_plate(row, col, raw_data_array, matrix_data, master_dict['plates'], num_plates)
+            progress_bar.next()
+    progress_bar.finish()
+    return master_dict, num_plates
 
-    # Initialize plate count and plate_data_raw dictionary
-    plates = 0
-    plate_data_raw = {}
+def calculate_concentrations(start_con: float, final_con: float, plates_per_rep: int) -> list:
+    """Calculate Concentrations based user input"""
+    conc_list = np.logspace(np.log10(start_con),
+                                  np.log10(final_con),
+                                  plates_per_rep)
+    # Apply high-precision rounding and remove unnecessary decimals
+    multiplier = 10**10
+    conc_list = [np.round(val * multiplier) / multiplier for val in conc_list]
+    conc_list = [int(val) if np.isclose(val, int(val)) else val for val in conc_list]
+    return conc_list
 
-    # Get the dimensions of the raw data array
-    rows, cols = raw_data_array.shape
+def validate_input(num_tech_rep: float, start_con: float, final_con: float, num_plates: int, conc_list: list) -> bool:
+    """Validate Experimental Setup"""
+    if start_con <= final_con:
+        print("Starting concentration cannot be smaller than final concentration.")
+        return False
+    if num_tech_rep > num_plates:
+        print("Number of technical replicates cannot exceed the number of plates.")
+        return False
+    if num_plates % num_tech_rep != 0:
+        print("Number of plates is not divisible by the number of technical replicates.")
+        return False
+    for i in range(len(conc_list)-1):
+        ratio = conc_list[i] / conc_list[i+1]
+        if not (np.isclose(ratio, 2) or np.isclose(ratio, 5) or np.isclose(ratio, 10)):
+            print("The concentrations do not follow a 1:2, 1:5, or 1:10 dilution pattern.")
+            return False
+    return True
 
-    # Find the starting point of each plate in the raw data array and extract the plate data
-    
-    for row in range(rows - 1):
-        for col in range(cols - 1):
-            cell = raw_data_array[row, col]
-            cell_south = raw_data_array[row + 1, col]
-            cell_east = raw_data_array[row, col + 1]
+def populate_rep_conc(master_dict: dict, plates_per_rep: int, conc_list: list) -> None:
+    """Populate the master_dict with technical replicate identifiers (tech_rep) and concentration values (conc_val)."""
+    num_plates = len(master_dict['plates'])
+    for plate_index in range(num_plates):
+        tech_rep = (plate_index // plates_per_rep) + 1
+        conc_val = conc_list[plate_index % plates_per_rep]
+        master_dict['plates'][plate_index + 1]['tech_rep'] = tech_rep
+        master_dict['plates'][plate_index + 1]['conc_val'] = conc_val
 
-            if pd.isna(cell) and cell_south == "A" and cell_east == 1:
-                plates += 1
-                raw_plate_name = f"Plate {plates}"
-                plate_data_raw[raw_plate_name] = {}
+def determine_mic(master_dict: dict):
+    """Determine the Minimum Inhibitory Concentration (MIC) for each well in the master dictionary."""
+    tech_reps = {plate_data['tech_rep'] for plate_data in master_dict['plates'].values()}
+    total_wells = len(next(iter(master_dict['plates'].values()))['wells'])
+    total_tech_reps = len(tech_reps)
+    progress_bar = FillingCirclesBar('Determining MIC:    ', max=total_tech_reps * total_wells)
+    for tech_rep in tech_reps:
+        plates_in_rep = [plate_data
+                         for plate_data in master_dict['plates'].values()
+                         if plate_data['tech_rep'] == tech_rep]
+        for well in plates_in_rep[0]['wells']:
+            mic_value = None
+            for plate_data in sorted(plates_in_rep, key=lambda x: x['conc_val']):
+                abs_val = plate_data['wells'][well]['abs_val']
+                amc = plate_data['wells'][well].get('amc')
+                # Handle Sterility Control and Growth Control
+                if amc in ["Sterility Control", "Growth Control"]:
+                    mic_value = "N/A"
+                    break
+                threshold = args.threshold
+                if abs_val <= threshold:
+                    mic_value = plate_data['conc_val']
+                    break
+            if mic_value is None:
+                highest_concentration = sorted(plates_in_rep, key=lambda x: -x['conc_val'])[0]['conc_val']
+                mic_value = f">{highest_concentration}"
+            # Update master_dict with MIC values
+            for plate_data in plates_in_rep:
+                plate_data['wells'][well]['mic'] = mic_value
+            progress_bar.next()
+    progress_bar.finish()
 
-                for i in range(8):
-                    for j in range(12):
-                        cell_name = chr(ord('A') + i) + str(j + 1)
-                        plate_data_raw[raw_plate_name][cell_name] = raw_data_array[row + 1 + i, col + 1 + j]
-
-    # Print the total number of plates retrieved
-    print(f"Total number of plates retrieved from the excel file: {plates}")
-
-
-    # Function to request user input and validate it
-    def request_input():
-        while True:
-            technical_replicates = int(input("Enter the number of technical replicates: "))
-            starting_concentration = float(input("Enter the starting concentration (µg/ml): "))
-            final_concentration = float(input("Enter the final concentration (µg/ml): "))
-
-            plates_per_technical_replicate = plates // technical_replicates
-
-            # Check if the starting concentration is less than or equal to the final concentration
-            if starting_concentration <= final_concentration:
-                print("Starting concentration should be greater than final concentration. Please try again.")
-                continue
-
-            # Check if the number of technical replicates exceeds the number of plates
-            if technical_replicates > plates:
-                print("Number of technical replicates exceeds the number of plates. Please try again.")
-                continue
-
-            # Check if the dilution series corresponds to a 1:2 dilution for each step given the starting and final concentrations and the number of plates per group
-            dilution_steps = np.log2(starting_concentration / final_concentration) + 1
-            if not np.isclose(dilution_steps, plates_per_technical_replicate):
-                print(
-                    "The dilution series does not correspond to a 1:2 dilution for each step given the starting and final concentrations and the number of plates per technical replicate. Please try again.")
-                continue
-
-            # Check if the number of plates is not divisible by the number of technical replicates (i.e., there are leftover plates)
-            if plates % technical_replicates != 0:
-                print(
-                    "The number of plates is not evenly divisible by the number of provided technical replicates. This will result in some plates being unused. Please try again.")
-                continue
-
-            return technical_replicates, starting_concentration, final_concentration, plates_per_technical_replicate
-
-
-    # Obtain validated user inputs
-    technical_replicates, starting_concentration, final_concentration, plates_per_technical_replicate = request_input()
-
-    # Calculate the concentrations for each plate
-    concentrations = np.logspace(np.log10(starting_concentration), np.log10(final_concentration), plates_per_technical_replicate)
-    concentrations = [round(c, 1) for c in concentrations]
-
-    # Rename plate data dictionary keys and update the values with new information
-    plate_data = {}
-
-    for replicate in range(1, technical_replicates + 1):
-        for plate in range(1, plates_per_technical_replicate + 1):
-            old_plate_name = f"Plate {(replicate - 1) * plates_per_technical_replicate + plate}"
-            plate_name = f"{replicate}.{plate}"
-            plate_data[plate_name] = plate_data_raw[old_plate_name]
-
-            for well, value in plate_data[plate_name].items():
-                # Extract the Synthesis_ID and BIROL_ID for the current well from the matrix_map
-                synthesis_id = matrix_map[matrix_map['Well'] == well]['Synthesis_ID'].values[0]
-                birol_id = matrix_map[matrix_map['Well'] == well]['BIROL_ID'].values[0]
-
-                # Add additional data to the plate_data dictionary for the current well
-                plate_data[plate_name][well] = {
-                    "value": value,
-                    "technical_replicate": replicate,
-                    "concentration": concentrations[plate - 1],
-                    "Synthesis_ID": synthesis_id,
-                    "BIROL_ID": birol_id
-                }
-
-    # Define output paths
-    output_folder = os.path.join(os.getcwd(), "output")
-
-    # Create output directory for the current run
-    output_folder = os.path.join(output_folder, folder_name)
-    if not os.path.exists(output_folder):
-        os.makedirs(output_folder)
-
-    # Define sub-directories for "plates" and "replicates"
-    plates_folder = os.path.join(output_folder, "plates")
-    replicates_folder = os.path.join(output_folder, "replicates")
-
-    # Create sub-directories if they don't exist
-    if not os.path.exists(plates_folder):
-        os.makedirs(plates_folder)
-    if not os.path.exists(replicates_folder):
-        os.makedirs(replicates_folder)
-
-    # Write each plate's data to a separate CSV file in the "plates" directory
-    for plate_name, cell_data in plate_data.items():
-        # Create a DataFrame for the current plate's data
-        plate_df = pd.DataFrame.from_dict(cell_data, orient='index')
-        plate_df.index.name = 'Well'
-
-        # Generate the output file path for the current plate
-        output_file_csv = os.path.join(plates_folder, f"{plate_name}.csv")
-
-        # Save the plate's data to a CSV file
-        plate_df.to_csv(output_file_csv)
-
-    # Iterate over each technical replicate
-    for replicate in range(1, technical_replicates + 1):
-        # Initialize a DataFrame to store the results for this replicate
-        replicate_df = pd.DataFrame()
-
-        # Extract the wells from the plate data
-        wells = list(plate_data[f"{replicate}.1"].keys())
-
-        # Initialize each row with well name
-        replicate_df['Well'] = wells
-
-        # Add the "AMP" column and populate it with corresponding BIROL_ID
-        replicate_df['AMP'] = [plate_data[f"{replicate}.1"][well]['BIROL_ID'] for well in wells]
-
-        # Iterate over each dilution stage
-        for dilution_stage in range(1, plates_per_technical_replicate + 1):
-            # Get the concentration for the current dilution stage
-            concentration = concentrations[dilution_stage - 1]
-
-            # Prepare the column name with concentration
-            column_name = str(concentration)
-
-            # Extract the values for each well at the current dilution stage
-            plate_name = f"{replicate}.{dilution_stage}"
-            dilution_values = [plate_data[plate_name][well]['value'] for well in wells]
-
-            # Add the new column to our result DataFrame
-            replicate_df[column_name] = dilution_values
-
-
-        # Add a new column for MIC and update plate_data dictionary
-        def calculate_mic(row):
-            if row['AMP'] in ['Sterility Control', 'Growth Control']:
-                return 'N/A'
+def determine_hc50(master_dict: dict):
+    """Determine the Hemolytic activity (HC50) for each well in the master dictionary."""
+    tech_reps = {plate_data['tech_rep'] for plate_data in master_dict['plates'].values()}
+    total_wells = len(next(iter(master_dict['plates'].values()))['wells'])
+    total_tech_reps = len(tech_reps)
+    progress_bar = FillingCirclesBar('Determining HC50:   ', max=total_tech_reps * total_wells)
+    for tech_rep in tech_reps:
+        plates_in_rep = [plate_data
+                         for plate_data in master_dict['plates'].values() if plate_data['tech_rep'] == tech_rep]
+        plates_in_rep = sorted(plates_in_rep, key=lambda x: x['conc_val'])
+        positive_controls = [well_data['abs_val']
+                             for plate_data in plates_in_rep
+                             for well_data in plate_data['wells'].values()
+                             if well_data.get('amc') == "Growth Control"]
+        negative_controls = [well_data['abs_val']
+                             for plate_data in plates_in_rep
+                             for well_data in plate_data['wells'].values()
+                             if well_data.get('amc') == "Sterility Control"]
+        avg_positive = sum(positive_controls) / len(positive_controls) if positive_controls else 0
+        avg_negative = sum(negative_controls) / len(negative_controls) if negative_controls else 0
+        # Calculate HC50 threshold
+        absorbance_range = avg_positive - avg_negative
+        absorbance_at_hc50 = avg_negative + (0.50 * absorbance_range)
+        # Update master_dict at with HC50 threshold
+        for plate_data in plates_in_rep:
+            plate_data['abs_at_hc50'] = absorbance_at_hc50
+        for well in plates_in_rep[0]['wells']:
+            amc_value = plates_in_rep[0]['wells'][well].get('amc')
+            if amc_value in ["Growth Control", "Sterility Control"]:
+                hc50_value = "N/A"
             else:
-                return next((c for c, v in reversed(list(zip(concentrations, row[2:]))) if round(v, 2) < 0.4999),
-                            f">{int(starting_concentration)}")
-
-
-        replicate_df['MIC'] = replicate_df.apply(calculate_mic, axis=1)
-
-        for index, row in replicate_df.iterrows():
-            well = row['Well']
-            mic = row['MIC']
-            for plate_name, well_data in plate_data.items():
-                if well in well_data:
-                    plate_data[plate_name][well]['MIC'] = mic
-
-        # Generate the output file paths for the current replicate
-        replicate_df_csv = os.path.join(replicates_folder, f"Replicate_{replicate}.csv")
-        replicate_df_excel = os.path.join(replicates_folder, f"Replicate_{replicate}.xlsx")
-
-        # Write replicate's data to CSV and Excel files
-        replicate_df.to_csv(replicate_df_csv, index=False)
-        replicate_df.to_excel(replicate_df_excel, index=False)
-
-
-### Combined MIC
-    # Initialize an empty DataFrame to store combined data
-    combined_df = pd.DataFrame()
-
-    # Separate the data by technical replicate group
-    for group in range(1, technical_replicates + 1):
-        # Specify the input CSV file
-        group_csv_input = os.path.join(output_folder, "replicates", f"Replicate_{group}.csv")
-
-        # Read the data from the CSV file
-        group_df = pd.read_csv(group_csv_input)
-
-        # Remove the rows where BIROL_ID is "Sterility Control" or "Growth Control"
-        group_df = group_df.loc[~group_df['AMP'].isin(["Sterility Control", "Growth Control"])]
-
-        # Add a new column for the technical replicate group number
-        group_df['Technical_Replicate_Group'] = group
-
-        # Reorder the columns to have 'Well', 'AMP', 'Technical_Replicate_Group', and 'MIC'
-        group_df = group_df[['Well', 'AMP', 'Technical_Replicate_Group', 'MIC']]
-
-        # Append the group_df to the combined_df
-        combined_df = pd.concat([combined_df, group_df], ignore_index=True)
-
-    # Define sub-directory for "combined"
-    combined_folder = os.path.join(output_folder, "combined")
-
-    # Create sub-directory if it doesn't exist
-    if not os.path.exists(combined_folder):
-        os.makedirs(combined_folder)
-
-    # Specify the output CSV file for combined data
-    combined_csv_output = os.path.join(combined_folder, "Combined_MIC_Values.csv")
-
-    # Write the combined DataFrame to a CSV file
-    combined_df.to_csv(combined_csv_output, index=False)
-
-    # Specify the output Excel file for combined data
-    combined_excel_output = os.path.join(combined_folder, "Combined_MIC_Values.xlsx")
-
-    # Write the combined DataFrame to an Excel file
-    combined_df.to_excel(combined_excel_output, index=False)
-
-### MIC Plot
-    import matplotlib.pyplot as plt
-    import seaborn as sns
-    # Output dimensions
-    plot_width = 20
-    plot_height = 8
-    dpi = 800
-
-    # Make MIC non-numeric for plotting
-    combined_df['MIC'] = combined_df['MIC'].astype(str)
-
-    # Create concentration list with string type
-    concentration_list = [f">{int(starting_concentration)}"] + [str(i) for i in concentrations]
-
-    # Order y-axis
-    combined_df['MIC'] = pd.Categorical(combined_df['MIC'], ordered=True, categories=concentration_list)
-
-    # Initialize the figure and axes
-    fig, ax = plt.subplots(figsize=(plot_width, plot_height))
-
-    # Scatter plot
-    scatter_plot = sns.stripplot(x='AMP', y='MIC', hue='Technical_Replicate_Group', palette='Set1', data=combined_df,
-                                ax=ax, s=10, jitter=True, dodge=True)
-
-    ax.set_xlabel('AMP', fontsize=15, fontweight='bold')
-    ax.set_ylabel('MIC (µg/mL)', fontsize=15, fontweight='bold')
-
-    ax.legend(title='Technical Replicate', title_fontsize='13', loc='upper right')
-
-    ax.tick_params(axis='x', labelrotation=90, labelsize=8)  # Rotate x-axis labels and decrease font size
-
-    ax.grid(color='grey', linestyle='-', linewidth=0.25, alpha=0.5)
-
-    lgnd = plt.legend(loc="upper right", scatterpoints=1, fontsize=10, title="Technical Replicate")
-    for handle in lgnd.legend_handles:
-        handle.set_sizes([30.0])
-
-    plt.tight_layout()
-
-        # Define sub-directory for "plot"
-    plot_folder = os.path.join(output_folder, "plot")
-
-    # Create sub-directory if it doesn't exist
-    if not os.path.exists(plot_folder):
-        os.makedirs(plot_folder)
-
-    # Save MIC plot
-    mic_plot_path = os.path.join(plot_folder, "MIC_plot.png")
-    plt.savefig(mic_plot_path, format='png', dpi=300)
-
-### Excel Output
-    import datetime
-    import os
-    import pandas as pd
-    import seaborn as sns
-
-    # Get the current date
-    now = datetime.datetime.now()
-
-    # Ensure the "output" directory exists within the output_folder, if not, create it
-    final_output_folder = os.path.join(output_folder, "output")
-    os.makedirs(final_output_folder, exist_ok=True)
-
-    # Create an Excel writer object with the path to the "output" directory
-    output_filename = os.path.join(final_output_folder, f"{organism_name}_MICMBC_{now.strftime('%m-%d-%Y')}.xlsx")
-
-    # Specify the number of empty columns to leave between replicates
-    empty_columns = 1
-
-    # The column offset for each replicate
-    offset = 0
-
-    # Generate a color palette
-    colors = sns.color_palette("Set2", n_colors=technical_replicates)
-
-    # Open Excel writer and Visual_Results worksheet within 'with' block
-    with pd.ExcelWriter(output_filename, engine='xlsxwriter') as writer:
-        # Define a format for the cell borders
-        border_format = writer.book.add_format({'border': 1, 'align': 'center'})
-
-        # Define a format for the headers in the MICMBC tab
-        header_format = writer.book.add_format(
-            {'bold': True, 'bg_color': '#D3D3D3', 'align': 'center', 'bottom': 2, 'bottom_color': 'black'})
-
-        # Add a worksheet for Visual_Results
-        worksheet = writer.book.add_worksheet('Visual_Results')
-
-        first_replicate_well_amp = None
-
-        # Iterate over each technical replicate
-        for replicate in range(1, technical_replicates + 1):
-            # Read the replicate's data from the Excel file
-            replicate_df = pd.read_excel(os.path.join(output_folder, "replicates", f"Replicate_{replicate}.xlsx"))
-
-            # Fill empty cells with 'N/A'
-            replicate_df.fillna('N/A', inplace=True)
-
-            # Save Well-AMP pairs from the first replicate
-            if replicate == 1:
-                first_replicate_well_amp = replicate_df[['Well', 'AMP']].values.tolist()
-
-            # Write the DataFrame to the "Visual_Results" worksheet
-            replicate_df.to_excel(writer, sheet_name='Visual_Results', startcol=offset, index=False)
-
-            # Get the last row and last column index for formatting
-            last_row = len(replicate_df.index)
-            last_col = len(replicate_df.columns)
-
-            # Get the xlsxwriter workbook and worksheet objects.
-            workbook = writer.book
-            worksheet = writer.sheets['Visual_Results']
-
-            # Assign the color for this replicate
-            color = colors[replicate - 1]
-            hex_color = '#%02x%02x%02x' % (int(color[0] * 255), int(color[1] * 255), int(color[2] * 255))
-
-            # Apply the conditional formatting rule to the required range except the 'MIC' column
-            for col_num in range(offset, offset + last_col):
-                if replicate_df.columns[col_num - offset] != 'MIC':
-                    worksheet.conditional_format(1, col_num, last_row, col_num, {'type': '2_color_scale',
-                                                                                 'min_value': '0',
-                                                                                 'max_value': '100',
-                                                                                 'min_color': "#FFFFFF",
-                                                                                 'max_color': hex_color})
-
-                # Apply the border format to all cells including 'MIC'
-                for row_num in range(1, last_row + 1):  # +1 to include the last row
-                    cell_value = replicate_df.iloc[row_num - 1, col_num - offset]
-                    worksheet.write(row_num, col_num, cell_value, border_format)
-
-            # Increase the offset for the next replicate (the width of the DataFrame plus the number of empty columns)
-            offset += len(replicate_df.columns) + empty_columns
-
-
-        # Add a worksheet for MICMBC with the current date in the name
-        micmbc_worksheet = writer.book.add_worksheet(f"MICMBC_{now.strftime('%m%d%Y')}")
-
-        # Set the format for all cells to be centered
-        centered_format = writer.book.add_format({'align': 'center'})
-
-        # Write the headers for MICMBC with centered alignment
-        micmbc_worksheet.write(0, 0, 'Well', header_format)
-        micmbc_worksheet.write(0, 1, 'AMP', header_format)
-
-        # Write the MIC data for each technical replicate with centered alignment
-        for replicate in range(1, technical_replicates + 1):
-            # Read the replicate's data from the Excel file
-            replicate_df = pd.read_excel(os.path.join(output_folder, "replicates", f"Replicate_{replicate}.xlsx"))
-
-            # Fill empty cells with 'N/A'
-            replicate_df.fillna('N/A', inplace=True)
-
-            # Filter out 'N/A' values in the MIC column for the "MICMBC" tab
-            replicate_df = replicate_df[replicate_df['MIC'] != 'N/A']
-
-            # Get the MIC column name for the current replicate
-            mic_column_name = f"MIC_R{replicate}"
-
-            # Write the MIC values to the "MICMBC" worksheet with centered alignment
-            micmbc_worksheet.write(0, replicate + 1, mic_column_name, header_format)
-            for i, mic_value in enumerate(replicate_df['MIC'], start=1):
-                micmbc_worksheet.write(i, 0, replicate_df.iloc[i - 1]['Well'], centered_format)
-                micmbc_worksheet.write(i, 1, replicate_df.iloc[i - 1]['AMP'], centered_format)
-                micmbc_worksheet.write(i, replicate + 1, mic_value, centered_format)
-
-        # Write the MBC column after the last MIC data (cells below left empty)
-        micmbc_worksheet.write(0, technical_replicates + 2, 'MBC', header_format)
-
-        # Prepare a dictionary to store lowest MIC and corresponding replicate for each well
-        well_mic_data = {row[0]: {'L_MIC': float('inf'), 'R': None} for row in first_replicate_well_amp}
-
-        # Add a worksheet for MBC_Wells
-        mbc_wells_worksheet = writer.book.add_worksheet('MBC_Wells')
-
-        # Define header format
-        header_format = writer.book.add_format({
-            'bold': True,
-            'align': 'center',
-            'bg_color': '#D3D3D3',  # light gray fill
-            'bottom': 2,  # thick bottom border
-        })
-
-        # Write the column headers to the MBC_Wells worksheet
-        mbc_wells_worksheet.write('A1', 'Well', header_format)
-        mbc_wells_worksheet.write('B1', 'L_MIC', header_format)
-        mbc_wells_worksheet.write('C1', 'R', header_format)
-
-        # Calculate lowest MIC and its replicate for each well
-        for replicate in range(1, technical_replicates + 1):
-            # Read the replicate's data from the Excel file
-            replicate_df = pd.read_excel(os.path.join(output_folder, "replicates", f"Replicate_{replicate}.xlsx"))
-
-            # Fill empty cells with 'N/A'
-            replicate_df.fillna('N/A', inplace=True)
-
-            # Iterate over all wells
-            for _, row in replicate_df.iterrows():
-                well = row['Well']
-                mic = str(row['MIC'])  # Convert MIC to string
-
-                # If MIC value is numeric and less than current lowest MIC for the well, update the lowest MIC and corresponding replicate
-                if mic.replace('.', '', 1).isdigit() and float(mic) < well_mic_data[well]['L_MIC']:
-                    well_mic_data[well]['L_MIC'] = float(mic)
-                    well_mic_data[well]['R'] = replicate
-
-        # Write the data for each well in the MBC_Wells worksheet
-        i = 1  # Start writing from the second row to leave the first row for headers
-        for well, mic_data in well_mic_data.items():
-            # If lowest MIC for the well is still inf (i.e., all replicates contain > in their mic values), skip this well
-            if mic_data['L_MIC'] == float('inf'):
-                continue
-
-            # Write the Well, L_MIC, and R values to the MBC_Wells worksheet with centered alignment
-            mbc_wells_worksheet.write(i, 0, well, centered_format)
-            mbc_wells_worksheet.write(i, 1, mic_data['L_MIC'], centered_format)
-            mbc_wells_worksheet.write(i, 2, mic_data['R'], centered_format)
-            i += 1  # Increment the row index
-
-        # Add a worksheet for Plots
-        plot_worksheet = writer.book.add_worksheet('Plots')
-
-        # Set the width of the columns in the Plots worksheet
-        plot_worksheet.set_column(0, 0, 30)
-        plot_worksheet.set_column(1, 1, 30)
-
-        # Insert the MIC plot
-        mic_plot_path = os.path.join(plot_folder, "MIC_plot.png")
-        plot_worksheet.insert_image('A1', mic_plot_path, {'x_scale': 1, 'y_scale': 1})
-
-
-    print(f'Output written to {output_filename}')
-        
-### mAST
-elif assay == "2":
-    print("mAST data extraction is not currently avaliable!")
-    pass
+                hc50_value = next((plate_data['conc_val']
+                                   for plate_data in plates_in_rep
+                                   if plate_data['wells'][well]['abs_val'] >= absorbance_at_hc50), None)
+                if hc50_value is None:
+                    hc50_value = f">{plates_in_rep[-1]['conc_val']}"
+            # Update master_dict with HC50 values
+            for plate_data in plates_in_rep:
+                plate_data['wells'][well]['hc50'] = hc50_value
+            progress_bar.next()
+    progress_bar.finish()
+
+def compute_selected_assay(assay: str, master_dict: dict):
+    """Compute the selected assay metric (MIC or HC50) and update the master_dict"""
+    if assay == 'ast':
+        determine_mic(master_dict)
+    elif assay == 'hc50':
+        determine_hc50(master_dict)
+
+
+def main():
+    """
+    main
+    """
+    # Process the raw data
+    master_dict, num_plates = process_data(args.raw_data, args.matrix)
+
+    # Caclulate number of plates per technical replicate group
+    plates_per_rep = num_plates // args.num_tech_rep
+
+    # Calculate concetration based on user input
+    conc_list = calculate_concentrations(args.start_con, args.final_con, plates_per_rep)
+
+    # Validate the inputs
+    valid = validate_input(args.num_tech_rep, args.start_con, args.final_con, num_plates, conc_list)
+    if not valid:
+        return  # Exit the function if validation fails
+
+    # Populating plates in master_dict with tech_rep and corresponding conc-val.
+    populate_rep_conc(master_dict, plates_per_rep, conc_list)
+
+    # Compute MIC or HC50 based on user selection
+    compute_selected_assay(args.assay, master_dict)
+
+
+if __name__ == "__main__":
+    main()
