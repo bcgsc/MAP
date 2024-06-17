@@ -1,5 +1,5 @@
 <p align="center">
-  <img width="100" alt="MAP-Logo" src=/projects/amp/asalehi/Git/CytEx/logo/MAP-Logo.png>
+  <img width="100" alt="MAP-Logo" src=logo/MAP-Logo.svg>
 </p>
 
 # Microdilution Assay Processor (MAP)
@@ -78,7 +78,7 @@ For both manual and high-throughput assays, the Excel file must contain plate re
 - 96-well plates must have column headers (1-12) and row identifiers (A-H).
 
 <p align="center">
-  <img width="800" alt=Raw-Data" src=/projects/amp/asalehi/Git/CytEx/logo/Manual-vs-Hts.png>
+  <img width="800" alt=Raw-Data" src=logo/Manual-vs-Hts.svg>
 </p>
 
 ### High-Throughput:
