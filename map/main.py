@@ -1,6 +1,7 @@
 """
 MAP 1.0.1
 """
+
 import argparse
 import os
 from datetime import datetime
@@ -16,19 +17,21 @@ def excel_file(input_path):
     if ext not in ['.xlsx', 'xls']:
         raise argparse.ArgumentTypeError(f"{input_path} is not an Excel file")
     return input_path
-parser = argparse.ArgumentParser(description="MAP:  Microdilution Assay Processor ")
-parser.add_argument('--version', action='version', version='MAP 1.0.1')
-parser.add_argument("-a", "--assay", help ="Assay type, antimicrobial susceptibility testing, hemolysis assay, or AlamarBlue assay", type=str, choices=['ast', 'hc50','cc50'], required = True)
-parser.add_argument("-o", "--operation_mode", help ="Operation mode, manual or high-throughput", type=str, choices=['manual', 'hts'], required = True)
-parser.add_argument("-p", "--prefix", help = "Prefix for the output Excel file", type = lambda s: s.replace(" ", "-"), required = False, default="Sample_name")
-parser.add_argument("-d", "--raw_data", help = "Excel file contaning the raw plate reader data in format of 96-well plates", type = excel_file, required = True)
-parser.add_argument("-m", "--matrix", help = "Excel file contaning the matrix map, specifying the treatment name (amc) and ID (Synth ID)", type = excel_file, required = True)
-parser.add_argument("-r", "--num_tech_rep", help = "Number of technical replicates used in high-throughput assay",type = int, required= False, default = 2)
-parser.add_argument("-s", "--start_con", help = "Starting concentration (highest concentration) of the assay", type = float, required = True)
-parser.add_argument("-f", "--final_con", help = "Final concentration (lowest concentration) of the assay", type = float, required = True)
-parser.add_argument("-t", "--threshold", help = "Absorbance threshold for determination of minimum inhibitory concetration (Default = 0.4999)", type = float, required = False, default = 0.4999)
-parser.add_argument("-e", "--output_dir", help = "Directory for the output Excel file", type = str, required = False, default = "results")
-args = parser.parse_args()
+
+def get_args():
+    parser = argparse.ArgumentParser(description="MAP: Microdilution Assay Processor")
+    parser.add_argument('--version', action='version', version='MAP 1.0.1')
+    parser.add_argument("-a", "--assay", help="Assay type, antimicrobial susceptibility testing, hemolysis assay, or AlamarBlue assay", type=str, choices=['ast', 'hc50', 'cc50'], required=True)
+    parser.add_argument("-o", "--operation_mode", help="Operation mode, manual or high-throughput", type=str, choices=['manual', 'hts'], required=True)
+    parser.add_argument("-p", "--prefix", help="Prefix for the output Excel file", type=lambda s: s.replace(" ", "-"), required=False, default="Sample_name")
+    parser.add_argument("-d", "--raw_data", help="Excel file containing the raw plate reader data in format of 96-well plates", type=excel_file, required=True)
+    parser.add_argument("-m", "--matrix", help="Excel file containing the matrix map, specifying the treatment name (amc) and ID (Synth ID)", type=excel_file, required=True)
+    parser.add_argument("-r", "--num_tech_rep", help="Number of technical replicates used in high-throughput assay", type=int, required=False, default=2)
+    parser.add_argument("-s", "--start_con", help="Starting concentration (highest concentration) of the assay", type=float, required=True)
+    parser.add_argument("-f", "--final_con", help="Final concentration (lowest concentration) of the assay", type=float, required=True)
+    parser.add_argument("-t", "--threshold", help="Absorbance threshold for determination of minimum inhibitory concentration (Default = 0.4999)", type=float, required=False, default=0.4999)
+    parser.add_argument("-e", "--output_dir", help="Directory for the output Excel file", type=str, required=False, default="results")
+    return parser.parse_args()
 
 def detect_plate(row, col, raw_data_array):
     """Detect the start of a new plate using the markers "A" and 1."""
@@ -73,13 +76,11 @@ def expand_well_ranges(matrix_data):
             new_rows.append(row)
     return pd.DataFrame(new_rows)
 
-
-
-def process_plate(row, col, raw_data_array, matrix_data, master_dict, plate_num, operation_mode):
+def process_plate(args, row, col, raw_data_array, matrix_data, master_dict, plate_num):
     """
     Process the detected plate to capture absorbance value, synth_id, and amc.
     """
-    if operation_mode == 'manual':
+    if args.operation_mode == 'manual':
         master_dict[plate_num] = {'rows': {}}
         for i in range(8):
             row_id = chr(ord('A') + i)
@@ -103,11 +104,11 @@ def process_plate(row, col, raw_data_array, matrix_data, master_dict, plate_num,
                     master_dict[plate_num]['wells'][well]['synth_id'] = matrix_row['synth_id'].values[0]
                     master_dict[plate_num]['wells'][well]['amc'] = matrix_row['amc'].values[0]
 
-def process_data(raw_data_path, matrix_path, operation_mode):
+def process_data(args):
     """Process the raw data and return a master dictionary with processed plate data."""
-    raw_data = pd.read_excel(raw_data_path)
-    matrix_data = pd.read_excel(matrix_path)
-    if operation_mode == 'manual':
+    raw_data = pd.read_excel(args.raw_data)
+    matrix_data = pd.read_excel(args.matrix)
+    if args.operation_mode == 'manual':
         matrix_data = expand_well_ranges(matrix_data)
     raw_data_array = raw_data.to_numpy()
     num_rows, num_cols = raw_data_array.shape
@@ -119,32 +120,32 @@ def process_data(raw_data_path, matrix_path, operation_mode):
         for col in range(num_cols - 1):
             if detect_plate(row, col, raw_data_array):
                 num_plates += 1
-                process_plate(row, col, raw_data_array, matrix_data, master_dict['plates'], num_plates, operation_mode)
+                process_plate(args, row, col, raw_data_array, matrix_data, master_dict['plates'], num_plates)
             progress_bar.next()
     progress_bar.finish()
     return master_dict, num_plates
 
-def calculate_concentrations(start_con, final_con, plates_per_rep, operation_mode, master_dict):
+def calculate_concentrations(args, plates_per_rep, master_dict):
     """Calculate Concentrations based on user input."""
     if args.operation_mode == 'manual':
         wells = master_dict['plates'][1]['rows']['A']['wells'].values()
         wells_per_treatment  = sum(details.get('amc') not in ["Growth Control", "Sterility Control"] for details in wells)
-    num_points = plates_per_rep if operation_mode == 'hts' else wells_per_treatment
-    conc_list = np.logspace(np.log2(start_con), np.log2(final_con), num_points, base=2)
+    num_points = plates_per_rep if args.operation_mode == 'hts' else wells_per_treatment
+    conc_list = np.logspace(np.log2(args.start_con), np.log2(args.final_con), num_points, base=2)
     conc_list = np.around(conc_list, decimals=3)
     conc_list = [int(val) if np.isclose(val, int(val)) else val for val in conc_list]
     return conc_list
 
-def validate_input(num_tech_rep, start_con, final_con, num_plates, conc_list, operation_mode):
+def validate_input(args, num_plates, conc_list):
     """Validate Experimental Setup"""
-    if operation_mode == 'hts':
-        if num_tech_rep > num_plates:
+    if args.operation_mode == 'hts':
+        if args.num_tech_rep > num_plates:
             print("Number of technical replicates cannot exceed the number of plates.")
             return False
-        if num_plates % num_tech_rep != 0:
+        if num_plates % args.num_tech_rep != 0:
             print("Number of plates is not divisible by the number of technical replicates.")
             return False
-    if start_con <= final_con:
+    if args.start_con <= args.final_con:
         print("Starting concentration cannot be smaller than final concentration.")
         return False
     for i, j in zip(conc_list, conc_list[1:]):
@@ -176,7 +177,7 @@ def assign_conc_manual(master_dict, conc_list):
             for well_data in row_data['wells'].values():
                 if well_data['amc'] not in ['Sterility Control', 'Growth Control']:
                     well_data['conc_val'] = conc_list[conc_idx % total_conc_assignments]
-                    conc_idx += 1  # Move to the next concentration
+                    conc_idx += 1
     return master_dict
 
 def populate_rep_conc_hts(master_dict, plates_per_rep, conc_list):
@@ -197,7 +198,7 @@ def add_notes(concentrations_above_threshold):
     else:
         return ""
 
-def determine_mic_manual(master_dict):
+def determine_mic_manual(args, master_dict):
     """Determine MIC for manual operation mode"""
     total_wells = sum(len([data
                            for data in row['wells'].values()
@@ -232,7 +233,7 @@ def determine_mic_manual(master_dict):
                     data['note'] += (" " + additional_note if data['note'] else additional_note)
     progress_bar.finish()
 
-def determine_mic_hts(master_dict):
+def determine_mic_hts(args, master_dict):
     """
     Determine the Minimum Inhibitory Concentration (MIC) for each well in the master dictionary.
     """
@@ -269,7 +270,7 @@ def determine_mic_hts(master_dict):
             progress_bar.next()
     progress_bar.finish()
 
-def determine_hc50_cc50_manual(master_dict, assay):
+def determine_hc50_cc50_manual(args, master_dict):
     """Determine the Hemolytic Concentration 50 (HC50) or Cytotoxic Concentration 50 (CC50) for manual operation mode."""
     positive_controls = []
     negative_controls = []
@@ -282,13 +283,13 @@ def determine_hc50_cc50_manual(master_dict, assay):
                     negative_controls.append(data['abs_val'])
     avg_positive = sum(positive_controls) / len(positive_controls) if positive_controls else 0
     avg_negative = sum(negative_controls) / len(negative_controls) if negative_controls else 0
-    absorbance_range = avg_positive - avg_negative if assay == 'hc50' else avg_negative - avg_positive
+    absorbance_range = avg_positive - avg_negative if args.assay == 'hc50' else avg_negative - avg_positive
     non_control_wells = sum(
         1 for plate in master_dict['plates'].values() for row in plate['rows'].values()
         for well in row['wells'].values() if well.get('amc') not in ["Growth Control", "Sterility Control"])
-    progress_bar = FillingCirclesBar(f'Determining {assay.upper()}:     ', max=non_control_wells)
+    progress_bar = FillingCirclesBar(f'Determining {args.assay.upper()}:     ', max=non_control_wells)
     for plate_num, plate_data in master_dict['plates'].items():
-        absorbance_at_target = avg_negative + (0.50 * absorbance_range) if assay == 'hc50' else avg_positive + (0.50 * absorbance_range)
+        absorbance_at_target = avg_negative + (0.50 * absorbance_range) if args.assay == 'hc50' else avg_positive + (0.50 * absorbance_range)
         for row_id, row_data in plate_data['rows'].items():
             target_value = None
             sorted_wells = sorted([(well, data) for well, data in row_data['wells'].items() if 'conc_val' in data], key=lambda item: item[1]['conc_val'])
@@ -296,25 +297,24 @@ def determine_hc50_cc50_manual(master_dict, assay):
                 progress_bar.next()
                 if data.get('amc') in ["Growth Control", "Sterility Control"]:
                     continue
-                data[f'abs_at_{assay}'] = absorbance_at_target
-                if ((data['abs_val'] >= absorbance_at_target and assay == 'hc50') or
-                   (data['abs_val'] <= absorbance_at_target and assay == 'cc50')) and target_value is None:
+                data[f'abs_at_{args.assay}'] = absorbance_at_target
+                if ((data['abs_val'] >= absorbance_at_target and args.assay == 'hc50') or
+                   (data['abs_val'] <= absorbance_at_target and args.assay == 'cc50')) and target_value is None:
                     target_value = data['conc_val']
                     break
             if target_value is not None:
                 for well, data in row_data['wells'].items():
                     if data.get('amc') not in ["Growth Control", "Sterility Control"]:
-                        data[assay] = target_value
+                        data[args.assay] = target_value
                         progress_bar.next()
             else:
                 highest_concentration = args.start_con
                 for well, data in row_data['wells'].items():
                     if data.get('amc') not in ["Growth Control", "Sterility Control"]:
-                        data[assay] = f">{highest_concentration}"
+                        data[args.assay] = f">{highest_concentration}"
     progress_bar.finish()
 
-
-def determine_hc50_hts(master_dict):
+def determine_hc50_hts(args, master_dict):
     """Determine the Hemolytic activity (HC50) for each well in the master dictionary."""
     total_tech_reps = args.num_tech_rep
     tech_reps = set(range(1, total_tech_reps + 1))
@@ -353,44 +353,45 @@ def determine_hc50_hts(master_dict):
             progress_bar.next()
     progress_bar.finish()
 
-def compute_selected_assay(assay, master_dict, operation_mode):
+def compute_selected_assay(args, master_dict):
     """Compute the selected assay metric (MIC or HC50) and update the master_dict"""
-    if assay == 'ast':
-        if operation_mode == 'hts':
-            determine_mic_hts(master_dict)
-        if operation_mode == 'manual':
-            determine_mic_manual(master_dict)
-    if assay == 'hc50':
-        if operation_mode =='hts':
-            determine_hc50_hts(master_dict)
-        if operation_mode == 'manual':
-            determine_hc50_cc50_manual(master_dict, assay)
-    if assay == "cc50":
-        determine_hc50_cc50_manual(master_dict, assay)
+    if args.assay == 'ast':
+        if args.operation_mode == 'hts':
+            determine_mic_hts(args, master_dict)
+        if args.operation_mode == 'manual':
+            determine_mic_manual(args, master_dict)
+    if args.assay == 'hc50':
+        if args.operation_mode =='hts':
+            determine_hc50_hts(args, master_dict)
+        if args.operation_mode == 'manual':
+            determine_hc50_cc50_manual(args, master_dict)
+    if args.assay == "cc50":
+        determine_hc50_cc50_manual(args, master_dict)
 
-def generate_excel(master_dict, assay, prefix, operation_mode, output_dir):
+def generate_excel(args, master_dict):
     """Generate an Excel file output containing different sheets using the master_dict"""
-    total_steps = 2 if operation_mode == 'manual' else 3
+    total_steps = 2 if args.operation_mode == 'manual' else 3
     progress_bar = FillingCirclesBar('Generating Excel:     ', max=total_steps)
     date = datetime.now().strftime('%Y%m%d')
-    file_name = f"{prefix}_{assay.upper()}_{date}"
+    file_name = f"{args.prefix}_{args.assay.upper()}_{date}"
     counter = 0
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-    output_path = os.path.join(output_dir, f"{file_name}.xlsx")
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
+    output_path = os.path.join(args.output_dir, f"{file_name}.xlsx")
     while os.path.exists(output_path):
         counter += 1
-        output_path = os.path.join(output_dir, f"{file_name}_{counter}.xlsx")
+        output_path = os.path.join(args.output_dir, f"{file_name}_{counter}.xlsx")
     with pd.ExcelWriter(output_path, engine='xlsxwriter') as writer:
-        if operation_mode == 'manual':
-            create_visual_data_sheet_manual(master_dict, writer, assay, progress_bar)
-            create_mic_c50_sheet_manual(master_dict, writer, assay, progress_bar)
-        if operation_mode == 'hts':
-            create_visual_data_sheet_hts(master_dict, assay, writer, progress_bar)
-            create_mic_hc50_sheet_hts(master_dict, assay, writer, progress_bar)
-            create_raw_plate_sheet(master_dict, assay, writer, progress_bar)
+        if args.operation_mode == 'manual':
+            create_visual_data_sheet_manual(args, master_dict, writer, progress_bar)
+            create_mic_c50_sheet_manual(args, master_dict, writer, progress_bar)
+        if args.operation_mode == 'hts':
+            create_visual_data_sheet_hts(args, master_dict, writer, progress_bar)
+            create_mic_hc50_sheet_hts(args, master_dict, writer, progress_bar)
+            create_raw_plate_sheet(args, master_dict, writer, progress_bar)
     progress_bar.finish()
     print(f"\033[92mExcel output has been saved to {output_path}\033[0m")
+
 def cell_formats(workbook):
     """Initialize and return common cell formats for use in Excel sheets"""
     header_format = workbook.add_format({'bold': True,'align': 'center','valign': 'vcenter','border': 1})
@@ -405,20 +406,20 @@ def initialize_worksheet(writer, sheet_name):
     header_format, cell_format = cell_formats(workbook)
     return workbook, worksheet, header_format, cell_format
 
-def create_visual_data_sheet_manual(master_dict, writer, assay, progress_bar):
+def create_visual_data_sheet_manual(args, master_dict, writer, progress_bar):
     """ Create the visual data Excel sheet for manual assay """
     workbook, worksheet, header_format, cell_format = initialize_worksheet(writer, 'Visual_Data')
-    if assay == 'ast':
+    if args.assay == 'ast':
         column_widths = {'B:B': 6, 'C:N': 6, 'O:O': 14, 'P:P': 9, 'Q:R': 6, 'S:S': 70}
-    if assay == 'hc50':
+    if args.assay == 'hc50':
         column_widths = {'B:B': 6, 'C:N': 6, 'O:O': 14, 'P:P': 9, 'Q:Q': 6, 'R:R': 70}
-    if assay == 'cc50':
+    if args.assay == 'cc50':
         column_widths = {'B:B': 6, 'C:N': 6, 'O:O': 14, 'P:P': 9, 'Q:Q': 6, 'R:R': 70}
     for columns, width in column_widths.items():
         worksheet.set_column(columns, width)
     row_index = 1
-    assay_column_header = "CC50" if assay == "cc50" else "HC50" if assay == "hc50" else "MIC"
-    additional_headers = ["Synth_ID", "AMC", assay_column_header] + (["MBC"] if assay == "ast" else []) + ["Notes"]
+    assay_column_header = "CC50" if args.assay == "cc50" else "HC50" if args.assay == "hc50" else "MIC"
+    additional_headers = ["Synth_ID", "AMC", assay_column_header] + (["MBC"] if args.assay == "ast" else []) + ["Notes"]
     for plate_number, plate_data in master_dict['plates'].items():
         column_headers = [''] * 12
         for row_data in plate_data['rows'].values():
@@ -438,13 +439,13 @@ def create_visual_data_sheet_manual(master_dict, writer, assay, progress_bar):
             well_data = [first_well.get('synth_id', ''),
                         first_well.get('amc', ''),
                         first_well.get(assay_column_header.lower(), '')] + \
-                        ([] if assay == "hc50" or assay == "cc50" else ['']) + \
+                        ([] if args.assay == "hc50" or args.assay == "cc50" else ['']) + \
                         [first_well.get('note', '')]
             for col_num, data in enumerate(well_data, start=len(column_headers) + 2):
                 worksheet.write(row_index, col_num, data, cell_format)
             row_index += 1
-        min_color = "#E599FF" if assay == 'cc50' else "#FFFFFF"
-        max_color = "#F94449" if assay == "hc50" else ("#FFCCCC" if assay == "cc50" else "#FFE599")
+        min_color = "#E599FF" if args.assay == 'cc50' else "#FFFFFF"
+        max_color = "#F94449" if args.assay == "hc50" else ("#FFCCCC" if args.assay == "cc50" else "#FFE599")
         colour_scale_option = {
             'type': '2_color_scale',
             'min_color': min_color,
@@ -455,19 +456,19 @@ def create_visual_data_sheet_manual(master_dict, writer, assay, progress_bar):
         row_index += 2
     progress_bar.next()
 
-def create_mic_c50_sheet_manual(master_dict, writer, assay, progress_bar):
+def create_mic_c50_sheet_manual(args, master_dict, writer, progress_bar):
     """Create the MIC-MBC, HC50, or CC50 Excel sheet for manual assay operation mode."""
     date_str = datetime.now().strftime('%Y%m%d')
     sheet_name_mapping = {'ast': f'MIC-MBC_{date_str}',
                           'hc50': f'HC50_{date_str}',
                           'cc50': f'CC50_{date_str}'}
-    sheet_name = sheet_name_mapping[assay]
+    sheet_name = sheet_name_mapping[args.assay]
     workbook, worksheet, header_format, cell_format = initialize_worksheet(writer, sheet_name)
     headers = ['Synth_ID', 'AMC']
-    if assay == 'ast':
+    if args.assay == 'ast':
         headers += ['MIC', 'MBC']
     else:
-        headers.append(assay.upper())
+        headers.append(args.assay.upper())
     for col_num, header in enumerate(headers, start=0):
         worksheet.write(0, col_num, header, header_format)
     row_num = 1
@@ -476,10 +477,10 @@ def create_mic_c50_sheet_manual(master_dict, writer, assay, progress_bar):
             first_well_key = next(iter(row_data['wells']))
             first_well_data = row_data['wells'][first_well_key]
             row_values = [first_well_data.get('synth_id', ''), first_well_data.get('amc', '')]
-            if assay == 'ast':
+            if args.assay == 'ast':
                 row_values += [first_well_data.get('mic', 'N/A'), first_well_data.get('mbc', '')]  # Placeholder for MBC
             else:
-                row_values.append(first_well_data.get(assay, 'N/A'))
+                row_values.append(first_well_data.get(args.assay, 'N/A'))
             for col_num, value in enumerate(row_values, start=0):
                 worksheet.write(row_num, col_num, value, cell_format)
             row_num += 1
@@ -488,7 +489,7 @@ def create_mic_c50_sheet_manual(master_dict, writer, assay, progress_bar):
     worksheet.set_column('C:D', 6)   # Concentration values
     progress_bar.next()
 
-def create_visual_data_sheet_hts(master_dict, assay, writer, progress_bar):
+def create_visual_data_sheet_hts(args, master_dict, writer, progress_bar):
     """ Create the "Visual_Data" sheet """
     workbook, worksheet, header_format, cell_format = initialize_worksheet(writer, 'Visual-Data')
     reference_plate_wells = next(iter(master_dict['plates'].values()))['wells'].keys()
@@ -500,7 +501,7 @@ def create_visual_data_sheet_hts(master_dict, assay, writer, progress_bar):
             [plate_data for plate_data in master_dict['plates'].values() if plate_data['tech_rep'] == tech_rep],
             key=lambda x: x['conc_val'],
             reverse=True)
-        result_header = 'MIC' if assay == 'ast' else 'HC50'
+        result_header = 'MIC' if args.assay == 'ast' else 'HC50'
         headers = ['AMC'] + [str(plate['conc_val']) for plate in plates_in_rep] + [result_header]
         for col, header in enumerate(headers, start=first_col):
             worksheet.write(first_row, col, header, header_format)
@@ -510,14 +511,14 @@ def create_visual_data_sheet_hts(master_dict, assay, writer, progress_bar):
         for well in reference_plate_wells:
             well_amc_data = [plates_in_rep[0]['wells'][well].get('amc', 'N/A')]
             well_amc_data += [plate['wells'][well]['abs_val'] for plate in plates_in_rep]
-            assay_result_key = 'mic' if assay == 'ast' else 'hc50'
+            assay_result_key = 'mic' if args.assay == 'ast' else 'hc50'
             well_amc_data.append(plates_in_rep[0]['wells'][well].get(assay_result_key, 'N/A'))
             for col, item in enumerate(well_amc_data, start=first_col):
                 worksheet.write(first_row, col, item, cell_format)
             first_row += 1
         abs_first_col = first_col + 1
         abs_last_col = first_col + len(plates_in_rep)
-        max_colour = "#F94449" if assay == "hc50" else "#FFE599"
+        max_colour = "#F94449" if args.assay == "hc50" else "#FFE599"
         min_colour = "#FFFFFF"
         for col in range(abs_first_col, abs_last_col + 1):
             worksheet.conditional_format(header_row + 1, col, first_row - 1, col, {
@@ -529,16 +530,16 @@ def create_visual_data_sheet_hts(master_dict, assay, writer, progress_bar):
         first_row = 0
     progress_bar.next()
 
-def create_mic_hc50_sheet_hts(master_dict, assay, writer, progress_bar):
+def create_mic_hc50_sheet_hts(args, master_dict, writer, progress_bar):
     """ Create the "MIC-HC50" sheet """
     current_date = datetime.now().strftime('%Y%m%d')
-    sheet_name = 'HC50-' + current_date if assay == 'hc50' else 'MIC-MBC_' + current_date
+    sheet_name = 'HC50-' + current_date if args.assay == 'hc50' else 'MIC-MBC_' + current_date
     workbook, worksheet, header_format, cell_format = initialize_worksheet(writer, sheet_name)
-    assay_col_prefix = 'HC50' if assay == 'hc50' else 'MIC'
+    assay_col_prefix = 'HC50' if args.assay == 'hc50' else 'MIC'
     assay_result_key = assay_col_prefix.lower()
     headers = ['Well', 'AMC', 'Synthesis ID'] + [f"{assay_col_prefix}-R{i+1}" for i in range(args.num_tech_rep)]
     worksheet.set_column(0, len(headers) - 1, 15)
-    if assay == 'ast':
+    if args.assay == 'ast':
         headers.append('MBC')
     headers += ['Notes']
     for col, header in enumerate(headers):
@@ -566,13 +567,13 @@ def create_mic_hc50_sheet_hts(master_dict, assay, writer, progress_bar):
         worksheet.write(row, 2, data['synth_id'], cell_format)
         for i, value in enumerate(values):
             worksheet.write(row, 3 + i, value, cell_format)
-        if assay == 'ast':
+        if args.assay == 'ast':
             worksheet.write(row, 3 + args.num_tech_rep,'', cell_format)
-        worksheet.write(row, 4 + args.num_tech_rep if assay == 'ast' else 3 + args.num_tech_rep, data['notes'], cell_format)
+        worksheet.write(row, 4 + args.num_tech_rep if args.assay == 'ast' else 3 + args.num_tech_rep, data['notes'], cell_format)
         row += 1
     progress_bar.next()
 
-def create_raw_plate_sheet(master_dict, assay, writer,progress_bar):
+def create_raw_plate_sheet(args, master_dict, writer,progress_bar):
     """ Create the "Raw-Data" sheet """
     workbook, worksheet, header_format, cell_format = initialize_worksheet(writer, 'Raw-Data')
     row_letters = sorted(set(well[0] for plate in master_dict['plates'].values() for well in plate['wells']))
@@ -593,7 +594,7 @@ def create_raw_plate_sheet(master_dict, assay, writer,progress_bar):
         worksheet.conditional_format(first_row + 1, 1, row_num, len(column_numbers), {
             'type': '2_color_scale',
             'min_color': "#FFFFFF",
-            'max_color': "#F94449" if assay == "hc50" else "#FFE599"})
+            'max_color': "#F94449" if args.assay == "hc50" else "#FFE599"})
         first_row = row_num + 2
     progress_bar.next()
 
@@ -601,28 +602,33 @@ def main():
     """
     main
     """
-    master_dict, num_plates = process_data(args.raw_data, args.matrix, args.operation_mode)
+    # Get User Input
+    args = get_args()
+
+    #Process Data
+    master_dict, num_plates = process_data(args)
+
+    # Calculate plate count for each hts technical replicate
     plates_per_rep = num_plates // args.num_tech_rep
 
+    # Calculate concetration
     if args.operation_mode == 'manual':
         assign_manual_rep(master_dict)
-        conc_list = calculate_concentrations(args.start_con, args.final_con, plates_per_rep, args.operation_mode, master_dict)
+        conc_list = calculate_concentrations(args, plates_per_rep, master_dict)
         assign_conc_manual(master_dict, conc_list)
-
-    # Calculate concetration
     if args.operation_mode == 'hts':
-        conc_list = calculate_concentrations(args.start_con, args.final_con, plates_per_rep, args.operation_mode, master_dict)
+        conc_list = calculate_concentrations(args, plates_per_rep, master_dict)
         populate_rep_conc_hts(master_dict, plates_per_rep, conc_list)
 
     # Validate the inputs
-    if not validate_input(args.num_tech_rep, args.start_con, args.final_con, num_plates, conc_list, args.operation_mode):
+    if not validate_input(args, num_plates, conc_list):
         return
 
     # Compute assay
-    compute_selected_assay(args.assay, master_dict, args.operation_mode)
+    compute_selected_assay(args, master_dict)
 
     # Generate Excel file
-    generate_excel(master_dict, args.assay, args.prefix, args.operation_mode, args.output_dir)
+    generate_excel(args, master_dict)
 
 if __name__ == "__main__":
     main()
