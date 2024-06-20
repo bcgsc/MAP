@@ -9,6 +9,10 @@ import pandas as pd
 import numpy as np
 from progress.bar import FillingCirclesBar
 
+# Global Constants
+NUM_rows = 8
+NUM_columns = 12
+
 def excel_file(input_path):
     """
     Validate the file format for "raw_data" and "matrix".
@@ -21,8 +25,8 @@ def excel_file(input_path):
 def get_args():
     parser = argparse.ArgumentParser(description="MAP: Microdilution Assay Processor")
     parser.add_argument('--version', action='version', version='MAP 1.0.1')
-    parser.add_argument("-a", "--assay", help="Assay type, antimicrobial susceptibility testing, hemolysis assay, or AlamarBlue assay", type=str, choices=['ast', 'hc50', 'cc50'], required=True)
-    parser.add_argument("-o", "--operation_mode", help="Operation mode, manual or high-throughput", type=str, choices=['manual', 'hts'], required=True)
+    parser.add_argument("-a", "--assay", help="Assay type: antimicrobial susceptibility testing(ast), hemolysis assay(hc50), or AlamarBlue assay(cc50)", type=str, choices=['ast', 'hc50', 'cc50'], required=True)
+    parser.add_argument("-o", "--operation_mode", help="Operation mode: manual or high-throughput", type=str, choices=['manual', 'hts'], required=True)
     parser.add_argument("-p", "--prefix", help="Prefix for the output Excel file", type=lambda s: s.replace(" ", "-"), required=False, default="Sample_name")
     parser.add_argument("-d", "--raw_data", help="Excel file containing the raw plate reader data in format of 96-well plates", type=excel_file, required=True)
     parser.add_argument("-m", "--matrix", help="Excel file containing the matrix map, specifying the treatment name (amc) and ID (Synth ID)", type=excel_file, required=True)
@@ -82,10 +86,10 @@ def process_plate(args, row, col, raw_data_array, matrix_data, master_dict, plat
     """
     if args.operation_mode == 'manual':
         master_dict[plate_num] = {'rows': {}}
-        for i in range(8):
+        for i in range(NUM_rows):
             row_id = chr(ord('A') + i)
             master_dict[plate_num]['rows'][row_id] = {'wells': {}}
-            for j in range(12):
+            for j in range(NUM_columns):
                 well = chr(ord('A') + i) + str(j + 1)
                 abs_val = raw_data_array[row + 1 + i, col + 1 + j]
                 matrix_row = matrix_data[(matrix_data['well'] == well) & (matrix_data['plate_number'] == plate_num)]
@@ -95,8 +99,8 @@ def process_plate(args, row, col, raw_data_array, matrix_data, master_dict, plat
                     master_dict[plate_num]['rows'][row_id]['wells'][well]['amc'] = matrix_row['amc'].values[0]
     else:
         master_dict[plate_num] = {'wells': {}}
-        for i in range(8):
-            for j in range(12):
+        for i in range(NUM_rows):
+            for j in range(NUM_columns):
                 well = chr(ord('A') + i) + str(j + 1)
                 master_dict[plate_num]['wells'][well] = {'abs_val': raw_data_array[row + 1 + i, col + 1 + j]}
                 matrix_row = matrix_data[matrix_data['well'] == well]
@@ -182,7 +186,6 @@ def assign_conc_manual(master_dict, conc_list):
 
 def populate_rep_conc_hts(master_dict, plates_per_rep, conc_list):
     """Populate the master_dict with technical replicate identifiers (tech_rep) and concentration values (conc_val)."""
-    num_plates = len(master_dict['plates'])
     for plate_number in master_dict['plates']:
         tech_rep = ((plate_number - 1) // plates_per_rep) + 1
         conc_val = conc_list[(plate_number - 1) % plates_per_rep]
@@ -195,8 +198,7 @@ def add_notes(concentrations_above_threshold):
         concentration_word = "concentration" if len(concentrations_above_threshold) == 1 else "concentrations"
         concs = ", ".join(map(str, concentrations_above_threshold))
         return f"At {concentration_word} {concs}, absorbance values greater than the threshold were observed."
-    else:
-        return ""
+    return ""
 
 def determine_mic_manual(args, master_dict):
     """Determine MIC for manual operation mode"""
@@ -206,23 +208,23 @@ def determine_mic_manual(args, master_dict):
                            for plate in master_dict['plates'].values()
                            for row in plate['rows'].values())
     progress_bar = FillingCirclesBar('Determining MIC:      ', max=total_wells)
-    for plate_num, plate_data in master_dict['plates'].items():
-        for row_id, row_data in plate_data['rows'].items():
+    for _, plate_data in master_dict['plates'].items():
+        for _, row_data in plate_data['rows'].items():
             filtered_wells = {
                 well: data for well, data in row_data['wells'].items()
                 if 'conc_val' in data and data.get('amc') not in ["Sterility Control", "Growth Control"]}
-            sorted_wells = sorted(filtered_wells.items(), key=lambda x: x[1]['conc_val'])
+            sorted_wells = sorted(filtered_wells.items(), key=lambda x: x[1]['conc_val']) # sorting based on concentration
             mic_value = None
             concentrations_above_threshold = []
             mic_found = False
-            for well, data in sorted_wells:
+            for _, data in sorted_wells:
                 progress_bar.next()
                 if data['abs_val'] <= args.threshold and not mic_found:
                     mic_value = data['conc_val']
                     mic_found = True
                 elif mic_found and data['abs_val'] > args.threshold:
                     concentrations_above_threshold.append(data['conc_val'])
-            if mic_value is None and sorted_wells:
+            if not mic_found and sorted_wells:
                 highest_concentration = args.start_con
                 mic_value = f">{highest_concentration}"
             additional_note = add_notes(concentrations_above_threshold) if mic_value is not None else ""
@@ -238,14 +240,13 @@ def determine_mic_hts(args, master_dict):
     Determine the Minimum Inhibitory Concentration (MIC) for each well in the master dictionary.
     """
     total_tech_reps = args.num_tech_rep
-    tech_reps = set(range(1, total_tech_reps + 1))
     total_wells = len(next(iter(master_dict['plates'].values()))['wells'])
     progress_bar = FillingCirclesBar('Determining MIC:      ', max=total_tech_reps * total_wells)
-    for tech_rep in tech_reps:
+    for tech_rep in range(1, total_tech_reps + 1):
         plates_in_rep = [plate_data
                          for plate_data in master_dict['plates'].values()
                          if plate_data['tech_rep'] == tech_rep]
-        for well in plates_in_rep[0]['wells']:
+        for well in plates_in_rep[0]['wells']: # Using first plate as a reference within each tech_rep
             mic_value = None
             concentrations_above_threshold = []
             for plate_data in sorted(plates_in_rep, key=lambda x: x['conc_val']):
@@ -270,6 +271,7 @@ def determine_mic_hts(args, master_dict):
             progress_bar.next()
     progress_bar.finish()
 
+
 def determine_hc50_cc50_manual(args, master_dict):
     """Determine the Hemolytic Concentration 50 (HC50) or Cytotoxic Concentration 50 (CC50) for manual operation mode."""
     positive_controls = []
@@ -288,9 +290,9 @@ def determine_hc50_cc50_manual(args, master_dict):
         1 for plate in master_dict['plates'].values() for row in plate['rows'].values()
         for well in row['wells'].values() if well.get('amc') not in ["Growth Control", "Sterility Control"])
     progress_bar = FillingCirclesBar(f'Determining {args.assay.upper()}:     ', max=non_control_wells)
-    for plate_num, plate_data in master_dict['plates'].items():
+    for _, plate_data in master_dict['plates'].items():
         absorbance_at_target = avg_negative + (0.50 * absorbance_range) if args.assay == 'hc50' else avg_positive + (0.50 * absorbance_range)
-        for row_id, row_data in plate_data['rows'].items():
+        for _, row_data in plate_data['rows'].items():
             target_value = None
             sorted_wells = sorted([(well, data) for well, data in row_data['wells'].items() if 'conc_val' in data], key=lambda item: item[1]['conc_val'])
             for well, data in sorted_wells:
@@ -317,10 +319,9 @@ def determine_hc50_cc50_manual(args, master_dict):
 def determine_hc50_hts(args, master_dict):
     """Determine the Hemolytic activity (HC50) for each well in the master dictionary."""
     total_tech_reps = args.num_tech_rep
-    tech_reps = set(range(1, total_tech_reps + 1))
     total_wells = len(next(iter(master_dict['plates'].values()))['wells'])
     progress_bar = FillingCirclesBar('Determining HC50:     ', max=total_tech_reps * total_wells)
-    for tech_rep in tech_reps:
+    for tech_rep in range(1, total_tech_reps + 1):
         plates_in_rep = [plate_data
                          for plate_data in master_dict['plates'].values() if plate_data['tech_rep'] == tech_rep]
         plates_in_rep = sorted(plates_in_rep, key=lambda x: x['conc_val'])
@@ -421,7 +422,7 @@ def create_visual_data_sheet_manual(args, master_dict, writer, progress_bar):
     assay_column_header = "CC50" if args.assay == "cc50" else "HC50" if args.assay == "hc50" else "MIC"
     additional_headers = ["Synth_ID", "AMC", assay_column_header] + (["MBC"] if args.assay == "ast" else []) + ["Notes"]
     for plate_number, plate_data in master_dict['plates'].items():
-        column_headers = [''] * 12
+        column_headers = [''] * NUM_columns
         for row_data in plate_data['rows'].values():
             for col_num, (_, well_info) in enumerate(row_data['wells'].items(), start=2):
                 key = well_info.get('amc', '')
