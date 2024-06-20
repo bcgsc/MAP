@@ -26,7 +26,7 @@ cd MAP
 ## Create a Conda Environment
 First, create a new Conda environment:
 ```
-conda create --name map python=3.10.12
+conda create --name map python=3.10
 conda activate map
 ```
 ## Install MAP
@@ -47,7 +47,7 @@ The test results will be saved in the `tests/test_results` directory. Compare th
 
 # Dependencies
 MAP requires the following dependencies that are installed during installation:
-* python 3.10.12+
+* python 3.10+
 * pandas
 * numpy
 * progress
@@ -57,18 +57,7 @@ MAP requires the following dependencies that are installed during installation:
 # Data Structure
 MAP organizes its data using a hierarchical dictionary structure. This structure supports scalability and flexibility, allowing easy addition of plates, wells, or assay types. It reduces redundancy, speeds up data retrieval, and clearly defines relationships for analysis.
 
-### MAP Dictionary:
-- **Plates**: The top-level dictionary containing all the plates processed in the assay.
-  - **Plate**: Each plate is uniquely identified within the Plates dictionary.
-    - **Wells**: A dictionary containing information about each well in the plate.
-      - **Well**: The key is the well identifier (e.g., “A1”, “B2”).
-        - **Absorbance Value**: The absorbance reading for that specific well.
-        - **Synthesis ID**: An identifier for the synthesized compound tested in that well.
-        - **Antimicrobial Compound Name (AMC)**: The name of the antimicrobial compound tested.
-        - **Concentration Value**: The concentration of the compound.
-        - **MIC, HC50, or CC50 value**: The determined value for MIC (Minimum Inhibitory Concentration), HC50 (Half-Maximal Hemolytic Concentration), or CC50 (Half-Maximal Cytotoxic Concentration), depending on the assay.
-        - **Technical Replicate Number**: Identifies the replicate group for well
-- **Absorbance Threshold**: The provided threshold value for AST or the calculated threshold for HC50 or CC50 assays.
+For more information about MAP implementation details, check out our [wiki](https://github.com/bcgsc/MAP/wiki/Data-Structure).
 
 # Input
 MAP requires two main input files in Excel format: raw data and matrix. Ensure your input files match the provided requirements. For reference templates, please check the `template` directory.
@@ -121,9 +110,9 @@ options:
   -h, --help            show this help message and exit
   --version             show program's version number and exit
   -a {ast,hc50,cc50}, --assay {ast,hc50,cc50}
-                        Assay type, antimicrobial susceptibility testing, hemolysis assay, or AlamarBlue assay
+                        Assay type: antimicrobial susceptibility testing (ast), hemolysis assay (hc50), or AlamarBlue assay (cc50)
   -o {manual,hts}, --operation_mode {manual,hts}
-                        Operation mode, manual or high-throughput
+                        Operation mode: manual or high-throughput
   -p PREFIX, --prefix PREFIX
                         Prefix for the output Excel file
   -d RAW_DATA, --raw_data RAW_DATA
@@ -149,7 +138,7 @@ map -a ast -o hts -p E.coli_ATCC_25922_Hts -d path/to/data.xlsx -m path/to/matri
 This command runs the MAP with the following options:
 - **-a ast:** Specifies the assay type as Antimicrobial Susceptibility Testing (AST).
 - **-o hts:** Sets the operation mode to high-throughput .
-- **-p demo:** Prefixes the output file with "E.coli_ATCC_25922_Hts".
+- **-p E.coli_ATCC_25922_Hts:** Prefixes the output file with "E.coli_ATCC_25922_Hts".
 - **-d path/to/data.xlsx:** Path to the raw data Excel file.
 - **-m path/to/matrix.xlsx:** Path to the matrix Excel file.
 - **-r 2:** Number of technical replicates.
