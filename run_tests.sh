@@ -35,6 +35,6 @@ main() {
         run_test "$test_name" "$command"
         show_progress $((i + 1)) $total_tests
     done
-    echo -e "\n\033[1;31m*** Please comapre the test and expected results in 'tests' directory ***\033[0m"
+    echo -e "\n\033[1;31m*** Please compare the test and expected results in 'tests' directory ***\033[0m"
 }
 main
