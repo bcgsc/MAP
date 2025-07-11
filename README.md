@@ -1,3 +1,5 @@
+[![GitHub release](https://img.shields.io/github/v/release/bcgsc/MAP)](https://github.com/bcgsc/MAP/releases)
+
 <p align="center">
   <img width="100" alt="MAP-Logo" src=logo/MAP-Logo.svg>
 </p>
