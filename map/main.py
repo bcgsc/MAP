@@ -1,5 +1,5 @@
 """
-MAP 1.0.1
+MAP 1.0.2
 """
 
 import argparse
