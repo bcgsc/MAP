@@ -32,7 +32,7 @@ conda create --name map python=3.10
 conda activate map
 ```
 ## Install MAP
-Once the environment is activated, install MAP using the following command at the root directory.:
+Once the environment is activated, install MAP using the following command at the root directory:
 ```
 pip install .
 map --version
