@@ -1,4 +1,4 @@
-[![GitHub release](https://img.shields.io/github/v/release/bcgsc/MAP)](https://github.com/bcgsc/MAP/releases)
+[![GitHub release](https://img.shields.io/github/v/release/BirolLab/MAP)](https://github.com/BirolLab/MAP/releases)
 
 <p align="center">
   <img width="100" alt="MAP-Logo" src=logo/MAP-Logo.svg>
@@ -21,7 +21,7 @@ MAP automates data processing and analysis for high-throughput and manual microd
 ## Clone the Repository
 To clone the MAP repository, use the following command:
 ```
-git clone https://github.com/bcgsc/MAP.git
+git clone https://github.com/BirolLab/MAP.git
 cd MAP
 ```
 
@@ -59,7 +59,7 @@ MAP requires the following dependencies that are installed during installation:
 # Data Structure
 MAP organizes its data using a hierarchical dictionary structure. This structure supports scalability and flexibility, allowing easy addition of plates, wells, or assay types. It reduces redundancy, speeds up data retrieval, and clearly defines relationships for analysis.
 
-For more information about MAP implementation details, check out our [wiki](https://github.com/bcgsc/MAP/wiki/Data-Structure).
+For more information about MAP implementation details, check out our [wiki](https://github.com/BirolLab/MAP/wiki/Data-Structure).
 
 # Input
 MAP requires two main input files in Excel format: raw data and matrix. Ensure your input files match the provided requirements. For reference templates, please check the `template` directory.
